@@ -1,9 +1,7 @@
 using FishNet.Object;
 using FishNet.Object.Prediction;
 using FishNet.Transporting;
-using System;
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
 public class NetworkedPlayerController : NetworkBehaviour
@@ -23,6 +21,8 @@ public class NetworkedPlayerController : NetworkBehaviour
     private MoveData[] _inputCache = new MoveData[StateCacheSize];
     private ReconcileData[] _stateCache = new ReconcileData[StateCacheSize];
     private uint _currentTick;
+
+    #region Initialization
 
     private void Awake()
     {
@@ -54,14 +54,6 @@ public class NetworkedPlayerController : NetworkBehaviour
         }
     }
 
-    private void Update()
-    {
-        if (base.Owner.IsLocalClient)
-        {
-            HandleInput();
-        }
-    }
-
     private void Start()
     {
         if (base.Owner.IsLocalClient)
@@ -80,6 +72,18 @@ public class NetworkedPlayerController : NetworkBehaviour
         }
     }
 
+    #endregion
+
+    #region Input Handling
+
+    private void Update()
+    {
+        if (base.Owner.IsLocalClient)
+        {
+            HandleInput();
+        }
+    }
+
     private void HandleInput()
     {
         Vector3 newInputDirection = new Vector3(Input.GetAxisRaw("Horizontal"), 0, Input.GetAxisRaw("Vertical")).normalized;
@@ -87,6 +91,10 @@ public class NetworkedPlayerController : NetworkBehaviour
         _isJumping = Input.GetKeyDown(KeyCode.Space);
         _inputDirection = newInputDirection;
     }
+
+    #endregion
+
+    #region Tick Events
 
     private void TimeManager_OnTick()
     {
@@ -99,26 +107,6 @@ public class NetworkedPlayerController : NetworkBehaviour
             SendInputToServer(moveData);
             Move(moveData, ReplicateState.CurrentCreated);
         }
-    }
-
-    [ServerRpc(RequireOwnership = false)]
-    private void SendInputToServer(MoveData moveData)
-    {
-        if (ValidateInput(moveData))
-        {
-            Move(moveData, ReplicateState.CurrentCreated);
-        }
-    }
-
-    private bool ValidateInput(MoveData moveData)
-    {
-        // Example input validation logic
-        if (Mathf.Abs(moveData.Horizontal) > 1000 || Mathf.Abs(moveData.Vertical) > 1000)
-        {
-            Debug.LogWarning("Invalid input detected.");
-            return false;
-        }
-        return true;
     }
 
     private void TimeManager_OnPostTick()
@@ -135,6 +123,10 @@ public class NetworkedPlayerController : NetworkBehaviour
         }
     }
 
+    #endregion
+
+    #region Movement Logic
+
     private void BuildMoveData(out MoveData moveData)
     {
         moveData = new MoveData
@@ -145,26 +137,6 @@ public class NetworkedPlayerController : NetworkBehaviour
             IsJumping = _isJumping
         };
         moveData.SetTick(base.TimeManager.LocalTick);
-    }
-
-    private void ReplayInputs(uint startTick)
-    {
-        for (uint tick = startTick; tick < base.TimeManager.LocalTick; tick++)
-        {
-            int cacheIndex = (int)(tick % StateCacheSize);
-
-            if (_inputCache[cacheIndex].GetTick() == tick)
-            {
-                // Replay inputs as normal.
-                Move(_inputCache[cacheIndex], ReplicateState.ReplayedCreated);
-            }
-            else
-            {
-                Debug.LogWarning("Extrapolating inputs due to missing data.");
-                // Extrapolate based on the last known input.
-                Move(_inputCache[(int)((tick - 1) % StateCacheSize)], ReplicateState.CurrentCreated);
-            }
-        }
     }
 
     [Replicate]
@@ -192,6 +164,54 @@ public class NetworkedPlayerController : NetworkBehaviour
     {
         return Physics.Raycast(transform.position, Vector3.down, 1.1f, groundLayer);
     }
+
+    private void ReplayInputs(uint startTick)
+    {
+        for (uint tick = startTick; tick < base.TimeManager.LocalTick; tick++)
+        {
+            int cacheIndex = (int)(tick % StateCacheSize);
+
+            if (_inputCache[cacheIndex].GetTick() == tick)
+            {
+                // Replay inputs as normal.
+                Move(_inputCache[cacheIndex], ReplicateState.ReplayedCreated);
+            }
+            else
+            {
+                Debug.LogWarning("Extrapolating inputs due to missing data.");
+                // Extrapolate based on the last known input.
+                Move(_inputCache[(int)((tick - 1) % StateCacheSize)], ReplicateState.CurrentCreated);
+            }
+        }
+    }
+
+    #endregion
+
+    #region Server Communication
+
+    [ServerRpc(RequireOwnership = false)]
+    private void SendInputToServer(MoveData moveData)
+    {
+        if (ValidateInput(moveData))
+        {
+            Move(moveData, ReplicateState.CurrentCreated);
+        }
+    }
+
+    private bool ValidateInput(MoveData moveData)
+    {
+        // Example input validation logic
+        if (Mathf.Abs(moveData.Horizontal) > 1000 || Mathf.Abs(moveData.Vertical) > 1000)
+        {
+            Debug.LogWarning("Invalid input detected.");
+            return false;
+        }
+        return true;
+    }
+
+    #endregion
+
+    #region Reconciliation
 
     public override void CreateReconcile()
     {
@@ -225,6 +245,8 @@ public class NetworkedPlayerController : NetworkBehaviour
         _predictionRigidbody.ClearPendingForces();
         ReplayInputs(adjustedServerTick);
     }
+
+    #endregion
 }
 
 public struct MoveData : IReplicateData
